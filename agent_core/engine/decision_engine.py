@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -22,6 +23,7 @@ class DecisionOutcome(BaseModel):
     reason: str = Field(min_length=1)
     tool_name: str | None = None
     tool_summary: ToolExecutionSummary | None = None
+    tool_payload: dict[str, Any] | None = None
     evidence_node_id: str | None = None
     tool_artifact_id: str | None = None
     tool_latency_ms: float = Field(default=0.0, ge=0.0)
@@ -56,6 +58,13 @@ class DecisionEngine:
         self._summarization_policy = summarization_policy
         self._long_term_storage = long_term_storage
         self._invocation_counts: dict[str, int] = {}
+
+    async def _async_summarize(self, content: dict[str, Any]) -> ToolExecutionSummary:
+        """Use async LLM summarization when policy supports it, else sync fallback."""
+        summarize_async = getattr(self._summarization_policy, "summarize_async", None)
+        if summarize_async is not None:
+            return await summarize_async(content)
+        return self._summarization_policy.summarize(content)
 
     async def evaluate_and_execute(
         self,
@@ -139,7 +148,7 @@ class DecisionEngine:
             }
         )
 
-        summary = self._summarization_policy.summarize(payload.content)
+        summary = await self._async_summarize(payload.content)
         evidence_id = f"ev-{context.iteration}-{len(memory.evidence_graph.nodes)}"
         evidence_node = EvidenceNode(
             id=evidence_id,
@@ -162,6 +171,7 @@ class DecisionEngine:
             reason="executed",
             tool_name=proposal.tool_name,
             tool_summary=summary,
+            tool_payload=payload.content,
             evidence_node_id=actual_id,
             tool_artifact_id=raw_pointer,
             tool_latency_ms=latency,

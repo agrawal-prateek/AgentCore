@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pydantic import BaseModel, ConfigDict, Field
 
 from agent_core.config.agent_config import AgentConfig
@@ -30,6 +31,8 @@ class ContextBuilder:
         memory: MidTermMemory,
         phase_rules: str,
         latest_tool_result_summary: str,
+        latest_tool_payload: dict[str, object] | None = None,
+        recent_actions: list[str] | None = None,
     ) -> BuiltContext:
         active_id = memory.stack_tree.active_node_id
         if active_id is None:
@@ -53,6 +56,22 @@ class ContextBuilder:
             for e in evidence_nodes
         ]
 
+        # Build recent actions list (capped)
+        action_items: list[str] = []
+        if recent_actions:
+            action_items = recent_actions[: self._config.recent_actions_cap]
+
+        # Format the raw tool payload for priority 8
+        payload_str = ""
+        if latest_tool_payload:
+            try:
+                payload_str = json.dumps(latest_tool_payload, default=str)
+            except Exception:
+                payload_str = str(latest_tool_payload)
+                
+        # Priority ordering: 1=goal, 2=phase_rules, 3=active_branch,
+        # 4=recent_actions (NEW), 5=parent_summaries, 6=top_hypotheses,
+        # 7=top_evidence, 8=latest_tool_summary, 9=latest_tool_payload
         sections: list[tuple[str, object, int, int]] = [
             ("goal", state.goal, estimate_tokens(state.goal), 1),
             ("phase_rules", phase_rules, estimate_tokens(phase_rules), 2),
@@ -67,14 +86,21 @@ class ContextBuilder:
                 estimate_tokens(active_node.objective + " " + active_node.summary),
                 3,
             ),
-            ("parent_summaries", compressed_parent_summaries, estimate_tokens(" ".join(compressed_parent_summaries)), 4),
-            ("top_hypotheses", top_hypotheses, estimate_tokens(" ".join(top_hypotheses)), 5),
-            ("top_evidence", evidence_summaries, estimate_tokens(" ".join(evidence_summaries)), 6),
+            ("recent_actions", action_items, estimate_tokens(" ".join(action_items)), 4),
+            ("parent_summaries", compressed_parent_summaries, estimate_tokens(" ".join(compressed_parent_summaries)), 5),
+            ("top_hypotheses", top_hypotheses, estimate_tokens(" ".join(top_hypotheses)), 6),
+            ("top_evidence", evidence_summaries, estimate_tokens(" ".join(evidence_summaries)), 7),
             (
                 "latest_tool_result_summary",
                 latest_tool_result_summary[:220],
-                estimate_tokens(latest_tool_result_summary),
-                7,
+                estimate_tokens(latest_tool_result_summary[:220]),
+                8,
+            ),
+            (
+                "latest_tool_payload",
+                payload_str,
+                estimate_tokens(payload_str),
+                9,
             ),
         ]
 

@@ -57,6 +57,7 @@ class LoopController:
 
     async def run(self, *, state: AgentState, memory: MidTermMemory) -> LoopArtifacts:
         latest_tool_summary = ""
+        latest_tool_payload: dict[str, Any] | None = None
         termination_reason = "unknown"
         agent_tree = self._ensure_agent_tree(state=state, memory=memory)
 
@@ -72,11 +73,20 @@ class LoopController:
 
             phase_def = self._profile.phases()[state.current_phase]
             phase_rules = f"{phase_def.description}; constraints={','.join(self._profile.domain_constraints())}"
+
+            # Build recent actions from decision history
+            recent_actions = self._build_recent_actions(
+                memory.decision_history,
+                cap=state.config_snapshot.recent_actions_cap,
+            )
+
             context = self._context_builder.build(
                 state=state,
                 memory=memory,
                 phase_rules=phase_rules,
                 latest_tool_result_summary=latest_tool_summary,
+                latest_tool_payload=latest_tool_payload,
+                recent_actions=recent_actions,
             )
 
             planner_trace_context = LLMTraceContext(
@@ -137,6 +147,8 @@ class LoopController:
             if outcome.tool_summary is not None:
                 latest_tool_summary = outcome.tool_summary.summary
                 memory.add_iteration_summary(outcome.tool_summary.summary)
+            if outcome.tool_payload is not None:
+                latest_tool_payload = outcome.tool_payload
 
             if outcome.accepted:
                 self._set_state_field(state, "stagnation_counter", 0, "tool-success")
@@ -149,18 +161,18 @@ class LoopController:
             else:
                 if outcome.tool_summary is None:
                     latest_tool_summary = f"rejected:{outcome.reason}"
+                latest_tool_payload = None
                 self._increment_state(state, "stagnation_counter", 1, "tool-rejected")
 
             top_conf = max((h.confidence_score for h in memory.hypotheses.values()), default=0.0)
-            stagnation_report = self._stagnation_detector.evaluate(
-                StagnationSignal(
-                    new_evidence_discovered=outcome.accepted,
-                    tool_name=proposal.tool_name,
-                    tool_args=proposal.arguments,
-                    top_hypothesis_confidence=top_conf,
-                    branch_depth=state.branch_depth,
-                )
+            stagnation_signal = StagnationSignal(
+                new_evidence_discovered=outcome.accepted,
+                tool_name=proposal.tool_name,
+                tool_args=proposal.arguments,
+                top_hypothesis_confidence=top_conf,
+                branch_depth=state.branch_depth,
             )
+            stagnation_report = await self._stagnation_detector.evaluate_async(stagnation_signal)
 
             if stagnation_report.triggered:
                 self._increment_state(state, "stagnation_counter", 1, "stagnation-detected")
@@ -255,6 +267,25 @@ class LoopController:
             role="orchestrator",
         )
         return memory.agent_tree
+
+    @staticmethod
+    def _build_recent_actions(decision_history: list[dict[str, Any]], *, cap: int) -> list[str]:
+        """Build a bounded list of recent action summaries from decision history."""
+        actions: list[str] = []
+        start = max(0, len(decision_history) - cap)
+        for event in decision_history[start:]:
+            iteration = event.get("iteration", "?")
+            executor = event.get("executor", {})
+            decision = event.get("decision", {})
+            tool_name = executor.get("tool_name", "unknown")
+            args = executor.get("arguments", {})
+            accepted = decision.get("accepted", False)
+            status = "accepted" if accepted else "rejected"
+
+            # Build compact args summary (key fields only, truncated)
+            args_preview = _compact_args(args)
+            actions.append(f"iter={iteration}:{tool_name}({args_preview}):{status}")
+        return actions
 
     def _set_state_field(self, state: AgentState, field: str, value: Any, reason: str) -> None:
         old_value = getattr(state, field)
@@ -363,3 +394,19 @@ class LoopController:
             "confidence_score": top_hypotheses[0].confidence_score if top_hypotheses else 0.0,
             "agent_count": memory.agent_tree.total_count if memory.agent_tree is not None else 0,
         }
+
+
+def _compact_args(args: dict[str, Any], max_len: int = 80) -> str:
+    """Build a compact one-line preview of tool arguments."""
+    parts: list[str] = []
+    for key in ("query", "q", "file_path", "pattern", "index", "collection", "sql"):
+        val = args.get(key)
+        if val is not None:
+            text = str(val)
+            if len(text) > 50:
+                text = text[:47] + "..."
+            parts.append(f"{key}='{text}'")
+    preview = ", ".join(parts)
+    if not preview:
+        preview = ", ".join(f"{k}={v}" for k, v in list(args.items())[:2])
+    return preview[:max_len]

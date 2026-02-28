@@ -34,7 +34,11 @@ class ProfileInterface(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def system_prompt_template(self) -> str:
+    def planner_prompt_template(self) -> str:
+        raise NotImplementedError
+
+    @abstractmethod
+    def executor_prompt_template(self) -> str:
         raise NotImplementedError
 
     @abstractmethod

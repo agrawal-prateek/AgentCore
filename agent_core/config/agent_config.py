@@ -35,3 +35,8 @@ class AgentConfig(BaseModel):
     max_active_agents: int = Field(default=4, ge=1)
     max_spawned_agents_total: int = Field(default=32, ge=1)
     max_agent_depth: int = Field(default=3, ge=1)
+    recent_actions_cap: int = Field(default=8, ge=1)
+    tool_dominance_threshold: float = Field(default=0.7, ge=0.0, le=1.0)
+    near_duplicate_similarity: float = Field(default=0.8, ge=0.0, le=1.0)
+    summarizer_model: str = Field(default="")
+    summarizer_max_chars: int = Field(default=600, ge=100)

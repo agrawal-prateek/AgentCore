@@ -47,7 +47,10 @@ class DummyProfile(ProfileInterface):
     def initial_phase(self) -> str:
         return "discover"
 
-    def system_prompt_template(self) -> str:
+    def planner_prompt_template(self) -> str:
+        return "system-template"
+
+    def executor_prompt_template(self) -> str:
         return "system-template"
 
     def completion_criteria(self, *, phase: str, top_confidence: float) -> CompletionSignal:

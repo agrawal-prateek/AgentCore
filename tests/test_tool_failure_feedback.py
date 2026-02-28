@@ -50,7 +50,10 @@ class BrokenProfile(ProfileInterface):
     def initial_phase(self) -> str:
         return "discover"
 
-    def system_prompt_template(self) -> str:
+    def planner_prompt_template(self) -> str:
+        return "system"
+
+    def executor_prompt_template(self) -> str:
         return "system"
 
     def completion_criteria(self, *, phase: str, top_confidence: float) -> CompletionSignal:

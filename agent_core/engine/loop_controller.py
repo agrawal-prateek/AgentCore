@@ -9,12 +9,14 @@ from agent_core.context.token_budget import estimate_tokens
 from agent_core.engine.decision_engine import DecisionContext, DecisionEngine
 from agent_core.engine.stagnation_detector import StagnationDetector, StagnationSignal
 from agent_core.engine.termination_engine import TerminationDecision, TerminationEngine
+from agent_core.llm.llm_adapter import LLMTraceContext
 from agent_core.observability.metrics import IterationMetrics, MetricsCollector
 from agent_core.observability.tracing import get_logger
 from agent_core.planning.executor import Executor
 from agent_core.planning.phase_manager import PhaseManager
 from agent_core.planning.planner import Planner
 from agent_core.profiles.profile_interface import ProfileInterface
+from agent_core.state.agent_tree import AgentNodeStatus, AgentTree
 from agent_core.state.agent_state import AgentState, AgentStatus
 from agent_core.state.hypothesis import HypothesisStatus
 from agent_core.state.memory_layers import MidTermMemory
@@ -56,10 +58,17 @@ class LoopController:
     async def run(self, *, state: AgentState, memory: MidTermMemory) -> LoopArtifacts:
         latest_tool_summary = ""
         termination_reason = "unknown"
+        agent_tree = self._ensure_agent_tree(state=state, memory=memory)
 
         while state.status == AgentStatus.RUNNING:
             loop_start = time.perf_counter()
             self._increment_state(state, "iteration_count", 1, "loop-start")
+            try:
+                active_agent = agent_tree.select_next_agent(iteration=state.iteration_count)
+            except ValueError:
+                termination_reason = "no-open-agents"
+                self._set_state_field(state, "status", AgentStatus.FAILED, termination_reason)
+                break
 
             phase_def = self._profile.phases()[state.current_phase]
             phase_rules = f"{phase_def.description}; constraints={','.join(self._profile.domain_constraints())}"
@@ -70,7 +79,24 @@ class LoopController:
                 latest_tool_result_summary=latest_tool_summary,
             )
 
-            planner_output = await self._planner.plan(context.payload)
+            planner_trace_context = LLMTraceContext(
+                investigation_id=state.id,
+                iteration=state.iteration_count,
+                agent_id=active_agent.id,
+                agent_role=active_agent.role,
+                task="planner",
+            )
+            planner_output = await self._planner.plan(context.payload, trace_context=planner_trace_context)
+            spawned_children = []
+            for spawn_request in planner_output.spawn_children:
+                child = agent_tree.spawn_child(
+                    parent_agent_id=active_agent.id,
+                    request=spawn_request,
+                    iteration=state.iteration_count,
+                )
+                if child is not None:
+                    spawned_children.append(child.id)
+
             self._log_state_transition(
                 state,
                 "phase",
@@ -84,21 +110,45 @@ class LoopController:
 
             self._apply_branch_selection(state=state, memory=memory, branch_id=planner_output.target_branch_id, objective=planner_output.next_objective)
 
-            proposal = await self._executor.propose(context.payload, planner_output.next_objective)
+            executor_trace_context = LLMTraceContext(
+                investigation_id=state.id,
+                iteration=state.iteration_count,
+                agent_id=active_agent.id,
+                agent_role=active_agent.role,
+                task="executor",
+            )
+            proposal = await self._executor.propose(
+                context.payload,
+                planner_output.next_objective,
+                trace_context=executor_trace_context,
+            )
             outcome = await self._decision_engine.evaluate_and_execute(
                 proposal=proposal,
-                context=DecisionContext(current_phase=state.current_phase, iteration=state.iteration_count),
+                context=DecisionContext(
+                    current_phase=state.current_phase,
+                    iteration=state.iteration_count,
+                    agent_id=active_agent.id,
+                ),
                 memory=memory,
             )
 
             risk_boundary_crossed = outcome.risk_boundary_crossed
 
-            if outcome.accepted and outcome.tool_summary is not None:
+            if outcome.tool_summary is not None:
                 latest_tool_summary = outcome.tool_summary.summary
-                self._set_state_field(state, "stagnation_counter", 0, "tool-success")
                 memory.add_iteration_summary(outcome.tool_summary.summary)
+
+            if outcome.accepted:
+                self._set_state_field(state, "stagnation_counter", 0, "tool-success")
+                if planner_output.termination_flag:
+                    agent_tree.mark_closed(
+                        agent_id=active_agent.id,
+                        status=AgentNodeStatus.COMPLETED,
+                        iteration=state.iteration_count,
+                    )
             else:
-                latest_tool_summary = f"rejected:{outcome.reason}"
+                if outcome.tool_summary is None:
+                    latest_tool_summary = f"rejected:{outcome.reason}"
                 self._increment_state(state, "stagnation_counter", 1, "tool-rejected")
 
             top_conf = max((h.confidence_score for h in memory.hypotheses.values()), default=0.0)
@@ -158,6 +208,17 @@ class LoopController:
                     "decision": outcome.model_dump(),
                     "stagnation": stagnation_report.model_dump(),
                     "termination": termination.model_dump(),
+                    "agent": {
+                        "id": active_agent.id,
+                        "role": active_agent.role,
+                        "parent_agent_id": active_agent.parent_agent_id,
+                        "depth": active_agent.depth,
+                        "spawned_children": spawned_children,
+                    },
+                    "trace": {
+                        "planner_trace_id": getattr(self._planner, "last_trace_id", None),
+                        "executor_trace_id": getattr(self._executor, "last_trace_id", None),
+                    },
                 }
             )
 
@@ -178,6 +239,22 @@ class LoopController:
 
         synthesis = self._final_synthesis(memory=memory, reason=termination_reason)
         return LoopArtifacts(final_state=state, final_synthesis=synthesis)
+
+    @staticmethod
+    def _ensure_agent_tree(*, state: AgentState, memory: MidTermMemory) -> AgentTree:
+        if memory.agent_tree is None:
+            memory.agent_tree = AgentTree(
+                id=f"agents:{state.id}",
+                max_active_agents=state.config_snapshot.max_active_agents,
+                max_total_agents=state.config_snapshot.max_spawned_agents_total,
+                max_depth=state.config_snapshot.max_agent_depth,
+            )
+        memory.agent_tree.ensure_root(
+            agent_id=f"{state.id}:agent:root",
+            objective=state.goal,
+            role="orchestrator",
+        )
+        return memory.agent_tree
 
     def _set_state_field(self, state: AgentState, field: str, value: Any, reason: str) -> None:
         old_value = getattr(state, field)
@@ -284,4 +361,5 @@ class LoopController:
             "evidence_mapping": [e.model_dump() for e in top_evidence],
             "decision_trace_length": len(memory.decision_history),
             "confidence_score": top_hypotheses[0].confidence_score if top_hypotheses else 0.0,
+            "agent_count": memory.agent_tree.total_count if memory.agent_tree is not None else 0,
         }

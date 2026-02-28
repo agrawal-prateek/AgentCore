@@ -58,7 +58,12 @@ class StaticPlanner(Planner):
     def __init__(self, output: PlannerOutput) -> None:
         self._output = output
 
-    async def plan(self, context_payload: dict[str, Any]) -> PlannerOutput:
+    async def plan(
+        self,
+        context_payload: dict[str, Any],
+        *,
+        trace_context=None,
+    ) -> PlannerOutput:
         return self._output
 
 
@@ -66,7 +71,13 @@ class StaticExecutor(Executor):
     def __init__(self, proposal: ExecutorProposal) -> None:
         self._proposal = proposal
 
-    async def propose(self, context_payload: dict[str, Any], objective: str) -> ExecutorProposal:
+    async def propose(
+        self,
+        context_payload: dict[str, Any],
+        objective: str,
+        *,
+        trace_context=None,
+    ) -> ExecutorProposal:
         return self._proposal
 
 

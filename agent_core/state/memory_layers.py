@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from agent_core.state.evidence_graph import EvidenceGraph
 from agent_core.state.hypothesis import Hypothesis
+from agent_core.state.agent_tree import AgentTree
 from agent_core.state.stack_tree import StackTree
 
 
@@ -21,6 +22,7 @@ class MidTermMemory(BaseModel):
     phase_summaries: dict[str, str] = Field(default_factory=dict)
     decision_history: list[dict[str, Any]] = Field(default_factory=list)
     iteration_summaries: list[str] = Field(default_factory=list)
+    agent_tree: AgentTree | None = None
 
     def add_decision(self, decision: dict[str, Any]) -> None:
         self.decision_history.append(decision)

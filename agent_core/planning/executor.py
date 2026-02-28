@@ -5,7 +5,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from agent_core.llm.llm_adapter import LLMAdapter, LLMRequest
+from agent_core.llm.llm_adapter import LLMAdapter, LLMRequest, LLMTraceContext
 
 
 class ExecutorProposal(BaseModel):
@@ -17,8 +17,16 @@ class ExecutorProposal(BaseModel):
 
 
 class Executor(ABC):
+    last_trace_id: str | None = None
+
     @abstractmethod
-    async def propose(self, context_payload: dict[str, Any], objective: str) -> ExecutorProposal:
+    async def propose(
+        self,
+        context_payload: dict[str, Any],
+        objective: str,
+        *,
+        trace_context: LLMTraceContext | None = None,
+    ) -> ExecutorProposal:
         raise NotImplementedError
 
 
@@ -29,8 +37,22 @@ class LLMExecutor(Executor):
         self._adapter = adapter
         self._model = model
         self._system_prompt = system_prompt
+        self.last_trace_id: str | None = None
 
-    async def propose(self, context_payload: dict[str, Any], objective: str) -> ExecutorProposal:
+    async def propose(
+        self,
+        context_payload: dict[str, Any],
+        objective: str,
+        *,
+        trace_context: LLMTraceContext | None = None,
+    ) -> ExecutorProposal:
+        agent_metadata = None
+        if trace_context is not None:
+            agent_metadata = {
+                "id": trace_context.agent_id,
+                "role": trace_context.agent_role,
+                "iteration": trace_context.iteration,
+            }
         request = LLMRequest(
             model=self._model,
             system_prompt=self._system_prompt,
@@ -38,8 +60,12 @@ class LLMExecutor(Executor):
                 "task": "executor",
                 "objective": objective,
                 "context": context_payload,
+                "agent": agent_metadata,
                 "output_schema": ExecutorProposal.model_json_schema(),
             },
+            trace_context=trace_context,
         )
+        self.last_trace_id = None
         response = await self._adapter.complete(request)
+        self.last_trace_id = response.trace_id
         return ExecutorProposal.model_validate(response.content)

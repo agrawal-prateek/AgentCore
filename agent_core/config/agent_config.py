@@ -32,3 +32,6 @@ class AgentConfig(BaseModel):
     phase_ancestry_cap: int = Field(default=4, ge=1)
     repeated_tool_call_window: int = Field(default=4, ge=2)
     max_tool_risk_score: float = Field(default=0.7, ge=0.0, le=1.0)
+    max_active_agents: int = Field(default=4, ge=1)
+    max_spawned_agents_total: int = Field(default=32, ge=1)
+    max_agent_depth: int = Field(default=3, ge=1)

@@ -1,3 +1,12 @@
 .venv
 agent_core.egg-info
 .idea
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Pytest
+.pytest_cache/
+.DS_Store

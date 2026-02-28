@@ -23,6 +23,7 @@ class DecisionOutcome(BaseModel):
     tool_name: str | None = None
     tool_summary: ToolExecutionSummary | None = None
     evidence_node_id: str | None = None
+    tool_artifact_id: str | None = None
     tool_latency_ms: float = Field(default=0.0, ge=0.0)
     risk_boundary_crossed: bool = False
 
@@ -31,6 +32,7 @@ class DecisionOutcome(BaseModel):
 class DecisionContext:
     current_phase: str
     iteration: int
+    agent_id: str = "unknown-agent"
     confirmation_granted: bool = False
 
 
@@ -92,13 +94,45 @@ class DecisionEngine:
 
         tool = self._tool_registry.get(proposal.tool_name)
         start = time.perf_counter()
-        payload = await tool.run(args)
+        try:
+            payload = await tool.run(args)
+        except Exception as exc:
+            latency = (time.perf_counter() - start) * 1000
+            self._invocation_counts[proposal.tool_name] = invocation_count + 1
+            failure_message = f"{exc.__class__.__name__}: {exc}"
+            artifact_id = await self._long_term_storage.store_tool_output(
+                {
+                    "tool": proposal.tool_name,
+                    "args": proposal.arguments,
+                    "agent_id": context.agent_id,
+                    "status": "failed",
+                    "error": failure_message,
+                    "raw": {},
+                    "metadata": {},
+                    "iteration": context.iteration,
+                }
+            )
+            failure_summary = ToolExecutionSummary(
+                summary=f"tool-failure:{proposal.tool_name}:{failure_message}"[:320],
+                entities=(proposal.tool_name, "tool_failure", exc.__class__.__name__),
+                compression_score=1.0,
+            )
+            return DecisionOutcome(
+                accepted=False,
+                reason=f"tool-execution-failed:{proposal.tool_name}:{failure_message}",
+                tool_name=proposal.tool_name,
+                tool_summary=failure_summary,
+                tool_artifact_id=artifact_id,
+                tool_latency_ms=latency,
+            )
         latency = (time.perf_counter() - start) * 1000
 
         raw_pointer = await self._long_term_storage.store_tool_output(
             {
                 "tool": proposal.tool_name,
                 "args": proposal.arguments,
+                "agent_id": context.agent_id,
+                "status": "success",
                 "raw": payload.content,
                 "metadata": payload.metadata,
                 "iteration": context.iteration,
@@ -129,5 +163,6 @@ class DecisionEngine:
             tool_name=proposal.tool_name,
             tool_summary=summary,
             evidence_node_id=actual_id,
+            tool_artifact_id=raw_pointer,
             tool_latency_ms=latency,
         )

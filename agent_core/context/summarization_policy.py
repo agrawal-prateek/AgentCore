@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import re
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from agent_core.llm.llm_adapter import LLMTraceContext
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -18,8 +21,7 @@ class ToolExecutionSummary(BaseModel):
 
 
 class SummarizationPolicy(ABC):
-    @abstractmethod
-    def summarize(self, payload: dict[str, Any]) -> ToolExecutionSummary:
+    def summarize(self, payload: dict[str, Any], context: str | None = None, trace_context: 'LLMTraceContext' | None = None) -> ToolExecutionSummary:
         raise NotImplementedError
 
 
@@ -29,7 +31,7 @@ class DeterministicSummarizationPolicy(SummarizationPolicy):
     def __init__(self, max_chars: int = 320) -> None:
         self._max_chars = max_chars
 
-    def summarize(self, payload: dict[str, Any]) -> ToolExecutionSummary:
+    def summarize(self, payload: dict[str, Any], context: str | None = None, trace_context: 'LLMTraceContext' | None = None) -> ToolExecutionSummary:
         # Try structured extraction first for known tool output shapes
         structured = self._try_structured_extract(payload)
         if structured:
@@ -59,7 +61,7 @@ class DeterministicSummarizationPolicy(SummarizationPolicy):
                     fp = snippet.get("file_path", "")
                     func = snippet.get("function_name", "")
                     cls = snippet.get("class_name", "")
-                    content = str(snippet.get("content", ""))[:100]
+                    content = str(snippet.get("content", ""))[:self._max_chars]
                     location = fp
                     if func:
                         location += f"::{func}"
@@ -76,7 +78,7 @@ class DeterministicSummarizationPolicy(SummarizationPolicy):
             for match in matches[:5]:
                 if isinstance(match, dict):
                     fp = match.get("file_path", "")
-                    content = str(match.get("content", ""))[:80]
+                    content = str(match.get("content", ""))[:self._max_chars]
                     parts.append(f"  [{fp}] {content}")
             return "\n".join(parts)
 
@@ -87,7 +89,7 @@ class DeterministicSummarizationPolicy(SummarizationPolicy):
             found = payload.get("found", True)
             if not found:
                 return f"file not found: {fp}"
-            preview = str(content_preview)[:200]
+            preview = str(content_preview)[:self._max_chars]
             return f"file [{fp}]: {preview}"
 
         # Log search results: extract hit count and samples
@@ -97,7 +99,7 @@ class DeterministicSummarizationPolicy(SummarizationPolicy):
             parts = [f"found {count} log entries:"]
             for hit in hits[:3]:
                 if isinstance(hit, dict):
-                    msg = str(hit.get("message", hit.get("_source", {}).get("message", "")))[:100]
+                    msg = str(hit.get("message", hit.get("_source", {}).get("message", "")))[:self._max_chars]
                     ts = hit.get("timestamp", hit.get("@timestamp", ""))
                     parts.append(f"  [{ts}] {msg}")
             return "\n".join(parts)
@@ -110,7 +112,7 @@ class DeterministicSummarizationPolicy(SummarizationPolicy):
             table = payload.get("collection", "")
             parts = [f"query returned {count} rows from {db}.{table}:" if table else f"query returned {count} rows from {db}:"]
             for row in rows[:2]:
-                parts.append(f"  {str(row)[:100]}")
+                parts.append(f"  {str(row)[:self._max_chars]}")
             return "\n".join(parts)
 
         # Conclusion

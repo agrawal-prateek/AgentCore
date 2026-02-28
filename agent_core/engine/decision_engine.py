@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from agent_core.llm.llm_adapter import LLMTraceContext
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -35,6 +38,8 @@ class DecisionContext:
     current_phase: str
     iteration: int
     agent_id: str = "unknown-agent"
+    investigation_id: str = ""
+    agent_role: str = ""
     confirmation_granted: bool = False
 
 
@@ -59,12 +64,12 @@ class DecisionEngine:
         self._long_term_storage = long_term_storage
         self._invocation_counts: dict[str, int] = {}
 
-    async def _async_summarize(self, content: dict[str, Any]) -> ToolExecutionSummary:
+    async def _async_summarize(self, content: dict[str, Any], context_str: str | None = None, trace_context: 'LLMTraceContext' | None = None) -> ToolExecutionSummary:
         """Use async LLM summarization when policy supports it, else sync fallback."""
         summarize_async = getattr(self._summarization_policy, "summarize_async", None)
         if summarize_async is not None:
-            return await summarize_async(content)
-        return self._summarization_policy.summarize(content)
+            return await summarize_async(content, context_str, trace_context)
+        return self._summarization_policy.summarize(content, context_str, trace_context)
 
     async def evaluate_and_execute(
         self,
@@ -148,7 +153,21 @@ class DecisionEngine:
             }
         )
 
-        summary = await self._async_summarize(payload.content)
+        active_node = memory.stack_tree.nodes.get(memory.stack_tree.active_node_id) if hasattr(memory, "stack_tree") else None
+        objective = active_node.objective if active_node else None
+
+        trace_context = None
+        if context.investigation_id and context.agent_id != "unknown-agent" and context.agent_role:
+            from agent_core.llm.llm_adapter import LLMTraceContext
+            trace_context = LLMTraceContext(
+                investigation_id=context.investigation_id,
+                iteration=context.iteration,
+                agent_id=context.agent_id,
+                agent_role=context.agent_role,
+                task="summarizer",
+            )
+
+        summary = await self._async_summarize(payload.content, objective, trace_context)
         evidence_id = f"ev-{context.iteration}-{len(memory.evidence_graph.nodes)}"
         evidence_node = EvidenceNode(
             id=evidence_id,

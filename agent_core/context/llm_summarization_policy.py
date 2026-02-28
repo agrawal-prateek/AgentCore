@@ -9,7 +9,7 @@ from agent_core.context.summarization_policy import (
     ToolExecutionSummary,
 )
 from agent_core.context.token_budget import estimate_tokens
-from agent_core.llm.llm_adapter import LLMAdapter, LLMRequest
+from agent_core.llm.llm_adapter import LLMAdapter, LLMRequest, LLMTraceContext
 
 logger = logging.getLogger("agent_core.summarizer")
 
@@ -21,7 +21,7 @@ Given a raw tool output, produce a concise summary that preserves:
 - Relationship to the investigation goal
 
 Output ONLY a JSON object: {{"summary": "<your concise summary>"}}
-Keep the summary under {max_chars} characters. Do not include raw code or raw log lines."""
+Keep the summary under {max_chars} characters. You MUST include relevant code snippets, database schemas, and critical log lines if they directly answer the agent's objective."""
 
 
 class LLMSummarizationPolicy(SummarizationPolicy):
@@ -40,28 +40,33 @@ class LLMSummarizationPolicy(SummarizationPolicy):
         self._fallback = DeterministicSummarizationPolicy(max_chars=max_chars)
         self._system_prompt = _SUMMARIZER_PROMPT.format(max_chars=max_chars)
 
-    def summarize(self, payload: dict[str, Any]) -> ToolExecutionSummary:
+    def summarize(self, payload: dict[str, Any], context: str | None = None, trace_context: LLMTraceContext | None = None) -> ToolExecutionSummary:
         """Synchronous interface — uses deterministic fallback only."""
-        return self._fallback.summarize(payload)
+        return self._fallback.summarize(payload, context, trace_context)
 
-    async def summarize_async(self, payload: dict[str, Any]) -> ToolExecutionSummary:
+    async def summarize_async(self, payload: dict[str, Any], context: str | None = None, trace_context: LLMTraceContext | None = None) -> ToolExecutionSummary:
         """Async LLM summarization with deterministic fallback."""
         # Small payloads don't need LLM summarization
         raw_text = str(payload)
         if estimate_tokens(raw_text) < 100:
-            return self._fallback.summarize(payload)
+            return self._fallback.summarize(payload, context, trace_context)
 
         try:
+            user_payload = {"tool_output": payload}
+            if context:
+                user_payload["investigation_objective"] = context
+
             request = LLMRequest(
                 model=self._model,
                 system_prompt=self._system_prompt,
-                user_payload={"tool_output": payload},
+                user_payload=user_payload,
                 temperature=0.0,
+                trace_context=trace_context,
             )
             response = await self._adapter.complete(request)
             summary_text = str(response.content.get("summary", ""))
             if not summary_text or len(summary_text) < 5:
-                return self._fallback.summarize(payload)
+                return self._fallback.summarize(payload, context, trace_context)
 
             summary_text = summary_text[: self._max_chars].strip()
             source_tokens = max(1, estimate_tokens(raw_text))
@@ -75,7 +80,7 @@ class LLMSummarizationPolicy(SummarizationPolicy):
             )
         except Exception as exc:
             logger.warning("LLM summarization failed, falling back to deterministic: %s", exc)
-            return self._fallback.summarize(payload)
+            return self._fallback.summarize(payload, context, trace_context)
 
     @staticmethod
     def _extract_entities(text: str) -> tuple[str, ...]:

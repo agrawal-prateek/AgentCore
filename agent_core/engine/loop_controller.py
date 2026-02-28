@@ -138,6 +138,8 @@ class LoopController:
                     current_phase=state.current_phase,
                     iteration=state.iteration_count,
                     agent_id=active_agent.id,
+                    investigation_id=state.id,
+                    agent_role=active_agent.role,
                 ),
                 memory=memory,
             )

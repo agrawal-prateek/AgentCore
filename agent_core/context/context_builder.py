@@ -43,16 +43,16 @@ class ContextBuilder:
             active_id,
             cap=self._config.context_parent_summary_cap,
         )
-        compressed_parent_summaries = [s[:120] for s in parent_summaries]
+        compressed_parent_summaries = parent_summaries
 
         top_hypotheses = [
-            f"{h.id}:{h.status}:{h.confidence_score:.2f}:{h.description[:120]}"
+            f"{h.id}:{h.status}:{h.confidence_score:.2f}:{h.description}"
             for h in memory.top_hypotheses(self._config.context_hypothesis_cap)
         ]
 
         evidence_nodes = memory.evidence_graph.top_relevant(self._config.context_evidence_cap)
         evidence_summaries = [
-            f"{e.id}:{e.type}:{e.relevance_score:.2f}:{e.summary[:140]}"
+            f"{e.id}:{e.type}:{e.relevance_score:.2f}:{e.summary}"
             for e in evidence_nodes
         ]
 
@@ -80,7 +80,7 @@ class ContextBuilder:
                 {
                     "id": active_node.id,
                     "objective": active_node.objective,
-                    "summary": active_node.summary[:180],
+                    "summary": active_node.summary,
                     "depth": active_node.depth,
                 },
                 estimate_tokens(active_node.objective + " " + active_node.summary),
@@ -92,8 +92,8 @@ class ContextBuilder:
             ("top_evidence", evidence_summaries, estimate_tokens(" ".join(evidence_summaries)), 7),
             (
                 "latest_tool_result_summary",
-                latest_tool_result_summary[:220],
-                estimate_tokens(latest_tool_result_summary[:220]),
+                latest_tool_result_summary,
+                estimate_tokens(latest_tool_result_summary),
                 8,
             ),
             (

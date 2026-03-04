@@ -11,6 +11,7 @@ class PhaseTransitionResult(BaseModel):
     changed: bool
     new_phase: str
     reason: str = Field(default="")
+    disallowed_reason: str | None = Field(default=None)
 
 
 class PhaseManager:
@@ -38,10 +39,17 @@ class PhaseManager:
             raise ValueError(f"Current phase '{current_phase}' not in profile")
 
         if requested_phase not in current.allowed_next_phases:
+            disallowed = (
+                f"Phase transition {current_phase}->{requested_phase} is not allowed. "
+                f"From {current_phase} you may only transition to: "
+                f"{', '.join(current.allowed_next_phases) or 'none (terminal phase)'}. "
+                "Phase transitions are one-way and irreversible."
+            )
             return PhaseTransitionResult(
                 changed=False,
                 new_phase=current_phase,
                 reason=f"disallowed-transition:{current_phase}->{requested_phase}",
+                disallowed_reason=disallowed,
             )
 
         return PhaseTransitionResult(changed=True, new_phase=requested_phase, reason="allowed")

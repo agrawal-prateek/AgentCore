@@ -116,7 +116,7 @@ class StackTree(BaseModel):
         while cursor and cursor.parent_id is not None and len(summaries) < cap:
             parent = self.nodes[cursor.parent_id]
             if parent.summary:
-                summaries.append(parent.summary[:180])
+                summaries.append(parent.summary)
             cursor = parent
         return summaries
 

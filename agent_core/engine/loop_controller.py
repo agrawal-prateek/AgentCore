@@ -72,7 +72,11 @@ class LoopController:
                 break
 
             phase_def = self._profile.phases()[state.current_phase]
-            phase_rules = f"{phase_def.description}; constraints={','.join(self._profile.domain_constraints())}"
+            phase_rules = (
+                f"{phase_def.description}; "
+                f"allowed_tools={','.join(phase_def.allowed_tools)}; "
+                f"constraints={','.join(self._profile.domain_constraints())}"
+            )
 
             # Build recent actions from decision history
             recent_actions = self._build_recent_actions(
@@ -117,6 +121,9 @@ class LoopController:
             transition = self._phase_manager.transition(state.current_phase, planner_output.phase_transition)
             if transition.changed:
                 self._set_state_field(state, "current_phase", transition.new_phase, transition.reason)
+            elif transition.disallowed_reason:
+                # Surface rejected phase transition to planner on the next iteration
+                latest_tool_summary = f"[phase-transition-rejected] {transition.disallowed_reason}"
 
             self._apply_branch_selection(state=state, memory=memory, branch_id=planner_output.target_branch_id, objective=planner_output.next_objective)
 
@@ -154,6 +161,12 @@ class LoopController:
 
             if outcome.accepted:
                 self._set_state_field(state, "stagnation_counter", 0, "tool-success")
+                # Write back accumulated findings to the active branch summary
+                active_id = memory.stack_tree.active_node_id
+                if active_id and active_id in memory.stack_tree.nodes and latest_tool_summary:
+                    node = memory.stack_tree.nodes[active_id]
+                    existing = node.summary
+                    node.summary = f"{existing} | {latest_tool_summary}" if existing else latest_tool_summary
                 if planner_output.termination_flag:
                     agent_tree.mark_closed(
                         agent_id=active_agent.id,
@@ -162,7 +175,17 @@ class LoopController:
                     )
             else:
                 if outcome.tool_summary is None:
-                    latest_tool_summary = f"rejected:{outcome.reason}"
+                    reject_msg = f"rejected:{outcome.reason}"
+                    # Enrich phase-disallow with guidance on which phases allow the tool
+                    if "phase-disallow" in outcome.reason:
+                        tool = proposal.tool_name
+                        allowing = [
+                            name for name, pdef in self._profile.phases().items()
+                            if tool in pdef.allowed_tools
+                        ]
+                        if allowing:
+                            reject_msg += f" (tool '{tool}' is available in phases: {', '.join(allowing)})"
+                    latest_tool_summary = reject_msg
                 latest_tool_payload = None
                 self._increment_state(state, "stagnation_counter", 1, "tool-rejected")
 
@@ -187,7 +210,10 @@ class LoopController:
                         memory.stack_tree.active_node_id or "none",
                         ",".join(stagnation_report.reasons),
                     )
-                self._force_phase_shift_if_possible(state)
+                # Only force a phase shift once the stagnation counter crosses the
+                # configured threshold — not on every individual stagnation event.
+                if state.stagnation_counter >= state.config_snapshot.stagnation_threshold:
+                    self._force_phase_shift_if_possible(state)
 
             for hypothesis in memory.hypotheses.values():
                 hypothesis.recalculate_confidence(state.iteration_count)

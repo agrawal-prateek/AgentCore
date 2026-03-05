@@ -200,7 +200,9 @@ class LoopController:
             stagnation_report = await self._stagnation_detector.evaluate_async(stagnation_signal)
 
             if stagnation_report.triggered:
-                self._increment_state(state, "stagnation_counter", 1, "stagnation-detected")
+                # Only increment for stagnation if tool was accepted (avoid double-count with tool-rejected)
+                if outcome.accepted:
+                    self._increment_state(state, "stagnation_counter", 1, "stagnation-detected")
                 active = memory.stack_tree.active_node_id
                 if active is not None:
                     memory.stack_tree.collapse_branch(active)
@@ -395,6 +397,7 @@ class LoopController:
         result = self._phase_manager.transition(state.current_phase, next_phase)
         if result.changed:
             self._set_state_field(state, "current_phase", result.new_phase, "stagnation-forced-shift")
+            self._set_state_field(state, "stagnation_counter", 0, "stagnation-reset-on-phase-shift")
 
     @staticmethod
     def _hypothesis_churn(memory: MidTermMemory) -> int:
@@ -414,8 +417,21 @@ class LoopController:
             reverse=True,
         )[:3]
         top_evidence = memory.evidence_graph.top_relevant(5)
+
+        # Auto-populate root_cause from top hypothesis when conclude was never called
+        if top_hypotheses and top_hypotheses[0].confidence_score >= 0.4:
+            root_cause = top_hypotheses[0].description
+        elif top_hypotheses:
+            root_cause = (
+                f"Root cause undetermined — investigation stagnated "
+                f"(confidence: {top_hypotheses[0].confidence_score:.0%})"
+            )
+        else:
+            root_cause = "Root cause undetermined — no hypotheses formed"
+
         return {
             "termination_reason": reason,
+            "root_cause": root_cause,
             "top_hypotheses": [h.model_dump() for h in top_hypotheses],
             "evidence_mapping": [e.model_dump() for e in top_evidence],
             "decision_trace_length": len(memory.decision_history),

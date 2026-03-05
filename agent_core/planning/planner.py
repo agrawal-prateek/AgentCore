@@ -18,6 +18,10 @@ class PlannerOutput(BaseModel):
     reasoning_summary: str = Field(min_length=1)
     termination_flag: bool = False
     spawn_children: tuple[AgentSpawnRequest, ...] = Field(default_factory=tuple)
+    hypothesis_update: dict[str, str] = Field(
+        default_factory=dict,
+        description="Map of hypothesis id (e.g. 'h:1') to description. Used to create new hypotheses.",
+    )
 
 
 class Planner(ABC):

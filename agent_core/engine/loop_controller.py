@@ -125,6 +125,16 @@ class LoopController:
                 # Surface rejected phase transition to planner on the next iteration
                 latest_tool_summary = f"[phase-transition-rejected] {transition.disallowed_reason}"
 
+            # Process hypothesis updates from planner
+            for h_id, h_desc in planner_output.hypothesis_update.items():
+                if h_id not in memory.hypotheses:
+                    from agent_core.state.hypothesis import Hypothesis
+                    memory.hypotheses[h_id] = Hypothesis(
+                        id=h_id,
+                        description=h_desc,
+                        last_updated_iteration=state.iteration_count,
+                    )
+
             self._apply_branch_selection(state=state, memory=memory, branch_id=planner_output.target_branch_id, objective=planner_output.next_objective)
 
             executor_trace_context = LLMTraceContext(
@@ -167,7 +177,9 @@ class LoopController:
                     node = memory.stack_tree.nodes[active_id]
                     existing = node.summary
                     node.summary = f"{existing} | {latest_tool_summary}" if existing else latest_tool_summary
-                if planner_output.termination_flag:
+                # Force immediate termination after conclude tool is accepted
+                conclude_requested = proposal.tool_name == "conclude"
+                if planner_output.termination_flag or conclude_requested:
                     agent_tree.mark_closed(
                         agent_id=active_agent.id,
                         status=AgentNodeStatus.COMPLETED,
@@ -418,16 +430,31 @@ class LoopController:
         )[:3]
         top_evidence = memory.evidence_graph.top_relevant(5)
 
-        # Auto-populate root_cause from top hypothesis when conclude was never called
-        if top_hypotheses and top_hypotheses[0].confidence_score >= 0.4:
-            root_cause = top_hypotheses[0].description
-        elif top_hypotheses:
-            root_cause = (
-                f"Root cause undetermined — investigation stagnated "
-                f"(confidence: {top_hypotheses[0].confidence_score:.0%})"
-            )
-        else:
-            root_cause = "Root cause undetermined — no hypotheses formed"
+        # Prefer root_cause from a conclude evidence node if available
+        root_cause: str | None = None
+        for ev in top_evidence:
+            if ev.source_reference == "conclude":
+                # The summary contains the rich conclude output
+                summary_text = ev.summary or ""
+                # Try to extract root_cause from raw evidence data
+                raw = memory.evidence_graph.get_raw(ev.id) if hasattr(memory.evidence_graph, "get_raw") else None
+                if isinstance(raw, dict) and raw.get("root_cause"):
+                    root_cause = raw["root_cause"]
+                elif summary_text:
+                    root_cause = summary_text
+                break
+
+        # Fallback: auto-populate from top hypothesis when conclude was never called
+        if not root_cause:
+            if top_hypotheses and top_hypotheses[0].confidence_score >= 0.4:
+                root_cause = top_hypotheses[0].description
+            elif top_hypotheses:
+                root_cause = (
+                    f"Root cause undetermined — investigation stagnated "
+                    f"(confidence: {top_hypotheses[0].confidence_score:.0%})"
+                )
+            else:
+                root_cause = "Root cause undetermined — no hypotheses formed"
 
         return {
             "termination_reason": reason,

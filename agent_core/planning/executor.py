@@ -33,10 +33,11 @@ class Executor(ABC):
 class LLMExecutor(Executor):
     """Executor proposes tool calls only; no direct state mutations."""
 
-    def __init__(self, *, adapter: LLMAdapter, model: str, system_prompt: str) -> None:
+    def __init__(self, *, adapter: LLMAdapter, model: str, system_prompt: str, temperature: float = 0.0) -> None:
         self._adapter = adapter
         self._model = model
         self._system_prompt = system_prompt
+        self._temperature = temperature
         self.last_trace_id: str | None = None
 
     async def propose(
@@ -63,6 +64,7 @@ class LLMExecutor(Executor):
                 "agent": agent_metadata,
                 "output_schema": ExecutorProposal.model_json_schema(),
             },
+            temperature=self._temperature,
             trace_context=trace_context,
         )
         self.last_trace_id = None

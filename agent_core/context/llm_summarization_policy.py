@@ -52,7 +52,7 @@ class LLMSummarizationPolicy(SummarizationPolicy):
             return self._fallback.summarize(payload, context, trace_context)
 
         try:
-            user_payload = {"tool_output": payload}
+            user_payload = {"task": "summarizer", "tool_output": payload}
             if context:
                 user_payload["investigation_objective"] = context
 

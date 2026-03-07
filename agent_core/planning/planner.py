@@ -40,10 +40,11 @@ class Planner(ABC):
 class LLMPlanner(Planner):
     """Planner uses a dedicated model and strict output schema."""
 
-    def __init__(self, *, adapter: LLMAdapter, model: str, system_prompt: str) -> None:
+    def __init__(self, *, adapter: LLMAdapter, model: str, system_prompt: str, temperature: float = 0.0) -> None:
         self._adapter = adapter
         self._model = model
         self._system_prompt = system_prompt
+        self._temperature = temperature
         self.last_trace_id: str | None = None
 
     async def plan(
@@ -68,6 +69,7 @@ class LLMPlanner(Planner):
                 "agent": agent_metadata,
                 "output_schema": PlannerOutput.model_json_schema(),
             },
+            temperature=self._temperature,
             trace_context=trace_context,
         )
         self.last_trace_id = None

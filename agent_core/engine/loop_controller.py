@@ -490,13 +490,22 @@ class LoopController:
             else:
                 root_cause = "Root cause undetermined — no hypotheses formed"
 
+        # Determine confidence score: prioritize root agent findings (conclude tool)
+        # over the top hypothesis confidence (which may have staleness penalties).
+        confidence_score = top_hypotheses[0].confidence_score if top_hypotheses else 0.0
+        if memory.agent_tree is not None and memory.agent_tree.root_agent_id:
+            root = memory.agent_tree.nodes.get(memory.agent_tree.root_agent_id)
+            if root and root.findings_summary:
+                # If root agent has findings (from conclude), use its confidence
+                confidence_score = root.findings_confidence
+
         return {
             "termination_reason": reason,
             "root_cause": root_cause,
             "top_hypotheses": [h.model_dump() for h in top_hypotheses],
             "evidence_mapping": [e.model_dump() for e in top_evidence],
             "decision_trace_length": len(memory.decision_history),
-            "confidence_score": top_hypotheses[0].confidence_score if top_hypotheses else 0.0,
+            "confidence_score": confidence_score,
             "agent_count": memory.agent_tree.total_count if memory.agent_tree is not None else 0,
         }
 

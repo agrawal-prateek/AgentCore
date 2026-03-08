@@ -51,5 +51,44 @@ def test_agent_tree_scheduler_is_deterministic() -> None:
         iteration=1,
     )
 
-    # Highest priority first; ties broken by created_seq then id.
+    # All agents have last_active_iteration=0, so ties break by priority, then depth, then created_seq.
+    # root(prio=0.5,d=0), a(prio=0.9,d=1), b(prio=0.9,d=1), c(prio=0.7,d=1)
+    # Among those at last_active=0: highest priority first → "a" (prio=0.9, earlier seq)
     assert tree.select_next_agent(iteration=2).id == "a"
+
+
+def test_agent_tree_scheduler_round_robin() -> None:
+    """Verify agents take turns and parents wait for children."""
+    tree = AgentTree(id="agents:3", max_active_agents=4, max_total_agents=6, max_depth=3)
+    tree.ensure_root(agent_id="root", objective="root")
+    tree.spawn_child(
+        parent_agent_id="root",
+        request=AgentSpawnRequest(objective="auth specialist", role="specialist", priority=0.8, child_id="s1"),
+        iteration=1,
+    )
+    tree.spawn_child(
+        parent_agent_id="root",
+        request=AgentSpawnRequest(objective="infra specialist", role="specialist", priority=0.7, child_id="s2"),
+        iteration=1,
+    )
+
+    # Root has open children → excluded from scheduling.
+    # First pick: s1 wins (higher prio among children at last_active=0)
+    picked_1 = tree.select_next_agent(iteration=2)
+    assert picked_1.id == "s1"
+
+    # Second pick: s2 (round-robin, s1 just went)
+    picked_2 = tree.select_next_agent(iteration=3)
+    assert picked_2.id == "s2"
+
+    # Third pick: s1 again (round-robin between the two children, root still excluded)
+    picked_3 = tree.select_next_agent(iteration=4)
+    assert picked_3.id == "s1"
+
+    # Close both children — root becomes eligible again
+    tree.mark_closed(agent_id="s1", status=AgentNodeStatus.COMPLETED, iteration=4)
+    tree.mark_closed(agent_id="s2", status=AgentNodeStatus.COMPLETED, iteration=4)
+
+    # Now root is the only open agent, it gets scheduled to synthesize
+    picked_4 = tree.select_next_agent(iteration=5)
+    assert picked_4.id == "root"

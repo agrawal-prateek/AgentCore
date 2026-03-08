@@ -115,9 +115,30 @@ class AgentTree(BaseModel):
         candidates = [node for node in self.nodes.values() if node.status == AgentNodeStatus.OPEN]
         if not candidates:
             raise ValueError("No open agents available")
+
+        # Exclude parents that still have open children — they delegated
+        # work and should wait until children report back.
+        parents_with_open_children: set[str] = set()
+        for node in candidates:
+            if node.parent_agent_id is not None and node.parent_agent_id in self.nodes:
+                parent = self.nodes[node.parent_agent_id]
+                if parent.status == AgentNodeStatus.OPEN:
+                    parents_with_open_children.add(parent.id)
+
+        eligible = [n for n in candidates if n.id not in parents_with_open_children]
+        if not eligible:
+            # All open agents are parents waiting for children — shouldn't
+            # happen in practice, but fall back to the full candidate list.
+            eligible = candidates
+
+        # Round-robin with priority tiebreaker:
+        # 1. Least recently active first (ensures all agents get turns)
+        # 2. Higher priority wins ties
+        # 3. Deeper agents before shallower (children before parent)
+        # 4. Earlier creation order, then ID for determinism
         ordered = sorted(
-            candidates,
-            key=lambda node: (-node.priority, node.depth, node.created_seq, node.id),
+            eligible,
+            key=lambda node: (node.last_active_iteration, -node.priority, -node.depth, node.created_seq, node.id),
         )
         selected = ordered[0]
         selected.last_active_iteration = iteration

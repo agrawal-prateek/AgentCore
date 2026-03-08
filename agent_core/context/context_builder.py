@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from agent_core.config.agent_config import AgentConfig
 from agent_core.context.token_budget import TokenBudget, estimate_tokens
 from agent_core.state.agent_state import AgentState
+from agent_core.state.agent_tree import AgentNode, AgentTree
 from agent_core.state.memory_layers import MidTermMemory
 
 
@@ -33,6 +34,8 @@ class ContextBuilder:
         latest_tool_result_summary: str,
         latest_tool_payload: dict[str, object] | None = None,
         recent_actions: list[str] | None = None,
+        active_agent: AgentNode | None = None,
+        agent_tree: AgentTree | None = None,
     ) -> BuiltContext:
         active_id = memory.stack_tree.active_node_id
         if active_id is None:
@@ -69,9 +72,37 @@ class ContextBuilder:
             except Exception:
                 payload_str = str(latest_tool_payload)
                 
+        # Build agent hierarchy info for the planner
+        agent_hierarchy: dict[str, object] = {}
+        if agent_tree is not None and active_agent is not None:
+            agent_hierarchy = {
+                "active_agent": {
+                    "id": active_agent.id,
+                    "role": active_agent.role,
+                    "depth": active_agent.depth,
+                },
+                "open_agents": agent_tree.open_count,
+                "total_agents": agent_tree.total_count,
+                "max_active": agent_tree.max_active_agents,
+                "can_spawn": agent_tree.open_count < agent_tree.max_active_agents
+                    and agent_tree.total_count < agent_tree.max_total_agents,
+                "agents": [
+                    {
+                        "id": n.id.split(":")[-1],
+                        "role": n.role,
+                        "objective": n.objective[:80],
+                        "status": n.status.value,
+                        "depth": n.depth,
+                    }
+                    for n in agent_tree.nodes.values()
+                ],
+            }
+        agent_hierarchy_str = json.dumps(agent_hierarchy, default=str) if agent_hierarchy else ""
+
         # Priority ordering: 1=goal, 2=phase_rules, 3=active_branch,
-        # 4=recent_actions (NEW), 5=parent_summaries, 6=top_hypotheses,
-        # 7=top_evidence, 8=latest_tool_summary, 9=latest_tool_payload
+        # 4=agent_hierarchy, 5=recent_actions, 6=parent_summaries,
+        # 7=top_hypotheses, 8=top_evidence, 9=latest_tool_summary,
+        # 10=latest_tool_payload
         sections: list[tuple[str, object, int, int]] = [
             ("goal", state.goal, estimate_tokens(state.goal), 1),
             ("phase_rules", phase_rules, estimate_tokens(phase_rules), 2),
@@ -86,21 +117,22 @@ class ContextBuilder:
                 estimate_tokens(active_node.objective + " " + active_node.summary),
                 3,
             ),
-            ("recent_actions", action_items, estimate_tokens(" ".join(action_items)), 4),
-            ("parent_summaries", compressed_parent_summaries, estimate_tokens(" ".join(compressed_parent_summaries)), 5),
-            ("top_hypotheses", top_hypotheses, estimate_tokens(" ".join(top_hypotheses)), 6),
-            ("top_evidence", evidence_summaries, estimate_tokens(" ".join(evidence_summaries)), 7),
+            ("agent_hierarchy", agent_hierarchy, estimate_tokens(agent_hierarchy_str), 4),
+            ("recent_actions", action_items, estimate_tokens(" ".join(action_items)), 5),
+            ("parent_summaries", compressed_parent_summaries, estimate_tokens(" ".join(compressed_parent_summaries)), 6),
+            ("top_hypotheses", top_hypotheses, estimate_tokens(" ".join(top_hypotheses)), 7),
+            ("top_evidence", evidence_summaries, estimate_tokens(" ".join(evidence_summaries)), 8),
             (
                 "latest_tool_result_summary",
                 latest_tool_result_summary,
                 estimate_tokens(latest_tool_result_summary),
-                8,
+                9,
             ),
             (
                 "latest_tool_payload",
                 payload_str,
                 estimate_tokens(payload_str),
-                9,
+                10,
             ),
         ]
 

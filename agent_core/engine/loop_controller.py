@@ -91,6 +91,8 @@ class LoopController:
                 latest_tool_result_summary=latest_tool_summary,
                 latest_tool_payload=latest_tool_payload,
                 recent_actions=recent_actions,
+                active_agent=active_agent,
+                agent_tree=agent_tree,
             )
 
             planner_trace_context = LLMTraceContext(
@@ -162,6 +164,7 @@ class LoopController:
             )
 
             risk_boundary_crossed = outcome.risk_boundary_crossed
+            conclude_requested = False
 
             if outcome.tool_summary is not None:
                 latest_tool_summary = outcome.tool_summary.summary
@@ -185,6 +188,16 @@ class LoopController:
                         status=AgentNodeStatus.COMPLETED,
                         iteration=state.iteration_count,
                     )
+                    # When the root orchestrator concludes, terminate the entire
+                    # investigation — close all remaining open agents.
+                    if active_agent.depth == 0 and conclude_requested:
+                        for node in agent_tree.nodes.values():
+                            if node.status == AgentNodeStatus.OPEN and node.id != active_agent.id:
+                                agent_tree.mark_closed(
+                                    agent_id=node.id,
+                                    status=AgentNodeStatus.COMPLETED,
+                                    iteration=state.iteration_count,
+                                )
             else:
                 if outcome.tool_summary is None:
                     reject_msg = f"rejected:{outcome.reason}"
@@ -235,7 +248,9 @@ class LoopController:
             termination: TerminationDecision = self._termination_engine.evaluate(
                 state=state,
                 memory=memory,
-                planner_termination_flag=planner_output.termination_flag,
+                planner_termination_flag=planner_output.termination_flag or (
+                    conclude_requested and active_agent.depth == 0
+                ),
                 stagnation_counter=state.stagnation_counter,
                 risk_boundary_crossed=risk_boundary_crossed,
             )

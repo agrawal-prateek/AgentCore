@@ -41,3 +41,4 @@ class AgentConfig(BaseModel):
     summarizer_model: str = Field(default="")
     summarizer_max_chars: int = Field(default=600, ge=100)
     llm_temperature: float = Field(default=0.0, ge=0.0, le=2.0)
+    llm_timeout_seconds: float = Field(default=60.0, ge=1.0)

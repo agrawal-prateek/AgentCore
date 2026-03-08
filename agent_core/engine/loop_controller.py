@@ -183,6 +183,17 @@ class LoopController:
                 # Force immediate termination after conclude tool is accepted
                 conclude_requested = proposal.tool_name == "conclude"
                 if planner_output.termination_flag or conclude_requested:
+                    if conclude_requested:
+                        conclude_evidence = outcome.tool_payload or {}
+                        active_agent_node = agent_tree.nodes[active_agent.id]
+                        # Support both new 'findings' and old 'root_cause' keys during schema transition
+                        findings_text = conclude_evidence.get(
+                            "findings", conclude_evidence.get("root_cause", latest_tool_summary)
+                        )
+                        if findings_text:
+                            active_agent_node.findings_summary = str(findings_text)[:500]
+                        active_agent_node.findings_confidence = float(conclude_evidence.get("confidence", 0.0))
+
                     agent_tree.mark_closed(
                         agent_id=active_agent.id,
                         status=AgentNodeStatus.COMPLETED,
@@ -287,6 +298,7 @@ class LoopController:
                     "trace": {
                         "planner_trace_id": getattr(self._planner, "last_trace_id", None),
                         "executor_trace_id": getattr(self._executor, "last_trace_id", None),
+                        "summarization_trace_id": outcome.summarization_trace_id,
                     },
                 }
             )
@@ -445,19 +457,26 @@ class LoopController:
         )[:3]
         top_evidence = memory.evidence_graph.top_relevant(5)
 
-        # Prefer root_cause from a conclude evidence node if available
+        # Prefer root_cause from the root agent's findings
         root_cause: str | None = None
-        for ev in top_evidence:
-            if ev.source_reference == "conclude":
-                # The summary contains the rich conclude output
-                summary_text = ev.summary or ""
-                # Try to extract root_cause from raw evidence data
-                raw = memory.evidence_graph.get_raw(ev.id) if hasattr(memory.evidence_graph, "get_raw") else None
-                if isinstance(raw, dict) and raw.get("root_cause"):
-                    root_cause = raw["root_cause"]
-                elif summary_text:
-                    root_cause = summary_text
-                break
+        if memory.agent_tree is not None and memory.agent_tree.root_agent_id:
+            root = memory.agent_tree.nodes.get(memory.agent_tree.root_agent_id)
+            if root and root.findings_summary:
+                root_cause = root.findings_summary
+
+        # Fallback: scan conclude evidence nodes (backward compat)
+        if not root_cause:
+            for ev in top_evidence:
+                if ev.source_reference == "conclude":
+                    # The summary contains the rich conclude output
+                    summary_text = ev.summary or ""
+                    # Try to extract root_cause/findings from raw evidence data
+                    raw = memory.evidence_graph.get_raw(ev.id) if hasattr(memory.evidence_graph, "get_raw") else None
+                    if isinstance(raw, dict) and (raw.get("findings") or raw.get("root_cause")):
+                        root_cause = raw.get("findings") or raw.get("root_cause")
+                    elif summary_text:
+                        root_cause = summary_text
+                    break
 
         # Fallback: auto-populate from top hypothesis when conclude was never called
         if not root_cause:

@@ -58,9 +58,10 @@ class ToolPolicyEnforcer:
             )
 
         if policy.allowed_phases and current_phase not in policy.allowed_phases:
-            raise PermissionError(
-                f"Tool '{tool_name}' not allowed in phase '{current_phase}'"
-            )
+            if tool_name != "conclude":
+                raise PermissionError(
+                    f"Tool '{tool_name}' not allowed in phase '{current_phase}'"
+                )
 
         if invocation_count >= policy.max_invocations:
             raise PermissionError(

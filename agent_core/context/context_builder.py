@@ -75,6 +75,17 @@ class ContextBuilder:
         # Build agent hierarchy info for the planner
         agent_hierarchy: dict[str, object] = {}
         if agent_tree is not None and active_agent is not None:
+            child_reports = agent_tree.get_child_reports(active_agent.id)
+            reports_data = [
+                {
+                    "agent": r.role,
+                    "objective": r.objective[:100],
+                    "findings": r.findings_summary[:300],
+                    "confidence": r.findings_confidence,
+                    "status": r.status.value,
+                }
+                for r in child_reports
+            ]
             agent_hierarchy = {
                 "active_agent": {
                     "id": active_agent.id,
@@ -86,6 +97,7 @@ class ContextBuilder:
                 "max_active": agent_tree.max_active_agents,
                 "can_spawn": agent_tree.open_count < agent_tree.max_active_agents
                     and agent_tree.total_count < agent_tree.max_total_agents,
+                "child_reports": reports_data,
                 "agents": [
                     {
                         "id": n.id.split(":")[-1],

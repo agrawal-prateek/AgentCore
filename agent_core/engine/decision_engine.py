@@ -30,6 +30,7 @@ class DecisionOutcome(BaseModel):
     evidence_node_id: str | None = None
     tool_artifact_id: str | None = None
     tool_latency_ms: float = Field(default=0.0, ge=0.0)
+    summarization_trace_id: str | None = None
     risk_boundary_crossed: bool = False
 
 
@@ -62,7 +63,7 @@ class DecisionEngine:
         self._phase_manager = phase_manager
         self._summarization_policy = summarization_policy
         self._long_term_storage = long_term_storage
-        self._invocation_counts: dict[str, int] = {}
+        self._invocation_counts: dict[str, dict[str, int]] = {}  # agent_id -> tool_name -> count
 
     async def _async_summarize(self, content: dict[str, Any], context_str: str | None = None, trace_context: 'LLMTraceContext' | None = None) -> ToolExecutionSummary:
         """Use async LLM summarization when policy supports it, else sync fallback."""
@@ -87,7 +88,8 @@ class DecisionEngine:
                 reason=f"phase-disallow:{context.current_phase}:{proposal.tool_name}",
             )
 
-        invocation_count = self._invocation_counts.get(proposal.tool_name, 0)
+        agent_counts = self._invocation_counts.setdefault(context.agent_id, {})
+        invocation_count = agent_counts.get(proposal.tool_name, 0)
         try:
             policy = self._policy_enforcer.validate(
                 tool_name=proposal.tool_name,
@@ -112,7 +114,7 @@ class DecisionEngine:
             payload = await tool.run(args)
         except Exception as exc:
             latency = (time.perf_counter() - start) * 1000
-            self._invocation_counts[proposal.tool_name] = invocation_count + 1
+            self._invocation_counts.setdefault(context.agent_id, {})[proposal.tool_name] = invocation_count + 1
             failure_message = f"{exc.__class__.__name__}: {exc}"
             artifact_id = await self._long_term_storage.store_tool_output(
                 {
@@ -138,6 +140,7 @@ class DecisionEngine:
                 tool_summary=failure_summary,
                 tool_artifact_id=artifact_id,
                 tool_latency_ms=latency,
+                summarization_trace_id=failure_summary.trace_id,
             )
         latency = (time.perf_counter() - start) * 1000
 
@@ -184,7 +187,7 @@ class DecisionEngine:
             current_iteration=context.iteration,
         )
 
-        self._invocation_counts[proposal.tool_name] = invocation_count + 1
+        self._invocation_counts.setdefault(context.agent_id, {})[proposal.tool_name] = invocation_count + 1
         return DecisionOutcome(
             accepted=True,
             reason="executed",
@@ -194,4 +197,5 @@ class DecisionEngine:
             evidence_node_id=actual_id,
             tool_artifact_id=raw_pointer,
             tool_latency_ms=latency,
+            summarization_trace_id=summary.trace_id,
         )

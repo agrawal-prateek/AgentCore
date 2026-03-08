@@ -25,6 +25,8 @@ class PhaseManager:
             raise ValueError(f"Unknown phase '{phase}'")
 
     def can_use_tool(self, phase: str, tool_name: str) -> bool:
+        if tool_name == "conclude":
+            return True
         phase_def = self._profile.phases().get(phase)
         if phase_def is None:
             return False

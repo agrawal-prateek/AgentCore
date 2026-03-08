@@ -77,6 +77,7 @@ class LLMSummarizationPolicy(SummarizationPolicy):
                 summary=summary_text,
                 entities=self._extract_entities(summary_text),
                 compression_score=compression,
+                trace_id=response.trace_id,
             )
         except Exception as exc:
             logger.warning("LLM summarization failed, falling back to deterministic: %s", exc)

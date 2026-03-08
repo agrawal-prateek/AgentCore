@@ -18,6 +18,7 @@ class ToolExecutionSummary(BaseModel):
     summary: str = Field(min_length=1)
     entities: tuple[str, ...] = Field(default_factory=tuple)
     compression_score: float = Field(ge=0.0, le=1.0)
+    trace_id: str | None = None
 
 
 class SummarizationPolicy(ABC):

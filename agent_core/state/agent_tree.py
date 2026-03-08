@@ -35,6 +35,8 @@ class AgentNode(BaseModel):
     spawned_iteration: int = Field(ge=0)
     last_active_iteration: int = Field(default=0, ge=0)
     closed_iteration: int | None = None
+    findings_summary: str = ""
+    findings_confidence: float = 0.0
 
 
 class AgentTree(BaseModel):
@@ -49,6 +51,15 @@ class AgentTree(BaseModel):
     nodes: dict[str, AgentNode] = Field(default_factory=dict)
     root_agent_id: str | None = None
     _seq: int = PrivateAttr(default=0)
+
+    def get_child_reports(self, parent_agent_id: str) -> list[AgentNode]:
+        """Return closed children of the given parent that have findings."""
+        return [
+            node for node in self.nodes.values()
+            if node.parent_agent_id == parent_agent_id
+            and node.status in (AgentNodeStatus.COMPLETED, AgentNodeStatus.FAILED)
+            and node.findings_summary
+        ]
 
     def ensure_root(self, *, agent_id: str, objective: str, role: str = "orchestrator") -> AgentNode:
         existing = self.nodes.get(agent_id)

@@ -92,3 +92,44 @@ def test_agent_tree_scheduler_round_robin() -> None:
     # Now root is the only open agent, it gets scheduled to synthesize
     picked_4 = tree.select_next_agent(iteration=5)
     assert picked_4.id == "root"
+
+
+def test_get_child_reports() -> None:
+    tree = AgentTree(id="agents:4", max_active_agents=4, max_total_agents=6, max_depth=3)
+    tree.ensure_root(agent_id="root", objective="root")
+    
+    tree.spawn_child(
+        parent_agent_id="root",
+        request=AgentSpawnRequest(objective="obj 1", child_id="c1"),
+        iteration=1,
+    )
+    tree.spawn_child(
+        parent_agent_id="root",
+        request=AgentSpawnRequest(objective="obj 2", child_id="c2"),
+        iteration=1,
+    )
+    
+    # Neither are closed or have findings
+    assert len(tree.get_child_reports("root")) == 0
+    
+    # Close c1 with findings
+    c1_node = tree.nodes["c1"]
+    c1_node.findings_summary = "c1 findings"
+    c1_node.findings_confidence = 0.9
+    tree.mark_closed(agent_id="c1", status=AgentNodeStatus.COMPLETED, iteration=2)
+    
+    reports = tree.get_child_reports("root")
+    assert len(reports) == 1
+    assert reports[0].id == "c1"
+    assert reports[0].findings_summary == "c1 findings"
+    
+    # Close c2 without findings
+    tree.mark_closed(agent_id="c2", status=AgentNodeStatus.COMPLETED, iteration=3)
+    assert len(tree.get_child_reports("root")) == 1  # c2 has no findings yet
+    
+    # Add findings to c2
+    c2_node = tree.nodes["c2"]
+    c2_node.findings_summary = "c2 findings"
+    
+    reports = tree.get_child_reports("root")
+    assert len(reports) == 2
